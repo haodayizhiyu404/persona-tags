@@ -512,6 +512,38 @@ dialog.popup.persona-dupe-modified .popup-button-custom {
     outline-offset: -2px;
 }
 
+/* --- Sort Handle (manage mode) --- */
+.persona-sort-handle {
+    position: absolute;
+    left: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 9;
+    width: 18px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    opacity: 0.35;
+    color: var(--SmartThemeBodyColor);
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.persona-sort-handle:active {
+    cursor: grabbing;
+    opacity: 0.75;
+}
+
+/* 管理模式下禁止文字选中（防拖拽时蓝色高亮） */
+#user_avatar_block.manage-mode .avatar-container {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
 /* --- Position Badge (inline after name) --- */
 .persona-position-badge {
     font-size: 0.8em;

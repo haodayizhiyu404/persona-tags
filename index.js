@@ -230,31 +230,23 @@ jQuery(async () => {
         saveSettings();
     }
 
-    /** 批量置顶/置底：把选中的人设整体移到当前排序的最前/最后（保持选中项之间的相对顺序） */
+    /**
+     * 批量置顶/置底（快照式，行为可预测）：
+     * 在当前视图完整范围内，选中项保持彼此相对顺序排到最前/最后，
+     * 未选中项保持相对顺序顺延。排序不被标签/角色筛选缩小范围。
+     */
     function moveSelectedInOrder(toTop) {
-        if (selectedAvatars.size === 0) return;
-        const contextList = getContextList();
-        const picked = contextList.filter(id => selectedAvatars.has(id));
+        const domain = getContextList(true);
+        const picked = domain.filter(id => selectedAvatars.has(id));
         if (picked.length === 0) return;
-        const rest = contextList.filter(id => !selectedAvatars.has(id));
-        const newVisible = toTop ? [...picked, ...rest] : [...rest, ...picked];
+        const rest = domain.filter(id => !selectedAvatars.has(id));
 
-        // 合并回完整排序（保留不在当前视图中的项），与拖拽排序同一套逻辑
         const obj = ensurePersonaOrderObj();
-        const key = getOrderKey();
-        const fullOrder = obj[key] || [];
-        const visibleSet = new Set(contextList);
-        const merged = [];
-        let vi = 0;
-        for (const id of fullOrder) {
-            if (visibleSet.has(id)) merged.push(newVisible[vi++]);
-            else merged.push(id);
-        }
-        for (; vi < newVisible.length; vi++) merged.push(newVisible[vi]);
-        obj[key] = merged;
+        obj[getOrderKey()] = toTop ? [...picked, ...rest] : [...rest, ...picked];
         saveSettings();
 
         applyFiltersAndRender();
+        toastr.success(`已将 ${picked.length} 个人设${toTop ? '置顶' : '置底'}`);
     }
 
     function purgeOrphanedOrders() {
@@ -540,8 +532,8 @@ jQuery(async () => {
                 <select id="persona-char-filter" class="persona-char-filter" title="按绑定的角色卡/群组筛选人设">
                     <option value="">按角色筛选</option>
                 </select>
-                <span class="persona-view-mode-btn persona-batch-mode-btn" title="批量编辑">
-                    <i class="fa-solid fa-list-check"></i> 批量
+                <span class="persona-view-mode-btn persona-batch-mode-btn" title="管理模式：勾选批量操作，拖动左侧手柄（≡）排序">
+                    <i class="fa-solid fa-bars-staggered"></i> 管理
                 </span>
                 <span class="persona-view-mode-btn persona-refresh-btn" title="刷新人设列表">
                     <i class="fa-solid fa-rotate"></i>
@@ -586,10 +578,11 @@ jQuery(async () => {
             updateCharFilterOptions();
         });
 
-        // 批量编辑模式切换
+        // 管理模式切换
         $(document).off('click.ptBatchMode').on('click.ptBatchMode', '.persona-batch-mode-btn', function () {
             batchMode = !batchMode;
             $(this).toggleClass('active', batchMode);
+            $('#user_avatar_block').toggleClass('manage-mode', batchMode);
             if (!batchMode) {
                 selectedAvatars.clear();
                 $('#persona-batch-toolbar').remove();
@@ -1012,6 +1005,18 @@ jQuery(async () => {
         const $del = $(`<span class="persona-batch-btn persona-batch-btn-danger${disabledClass}"><i class="fa-solid fa-trash"></i> 删除</span>`);
         if (hasSelection) $del.on('click', batchDelete);
         $toolbar.append($del);
+
+        // 退出管理模式
+        const $done = $('<span class="persona-batch-btn"><i class="fa-solid fa-check"></i> 完成</span>');
+        $done.on('click', () => {
+            batchMode = false;
+            selectedAvatars.clear();
+            $('.persona-batch-mode-btn').removeClass('active');
+            $('#user_avatar_block').removeClass('manage-mode');
+            $('#persona-batch-toolbar').remove();
+            applyFiltersAndRender();
+        });
+        $toolbar.append($done);
     }
 
     // ===== 批量操作 =====
@@ -1212,7 +1217,7 @@ jQuery(async () => {
     // ===== 纯数据筛选（不操作 DOM） =====
 
     /** 完整队列：只管视图模式 + 排序，不管标签/搜索筛选 */
-    function getContextList() {
+    function getContextList(skipCharFilter) {
         const ctx = SillyTavern.getContext();
         let result = [...serverAvatarList];
 
@@ -1223,7 +1228,8 @@ jQuery(async () => {
         }
 
         // 按角色筛选（下拉框）：只看绑定给所选角色卡/群组的人设
-        if (charFilter) {
+        // skipCharFilter 供排序操作用：排序始终作用于当前视图的完整范围，不被筛选缩小
+        if (charFilter && !skipCharFilter) {
             const sep = charFilter.indexOf(':');
             const fType = charFilter.slice(0, sep) === 'group' ? 'group' : 'character';
             const fId = charFilter.slice(sep + 1);
@@ -1293,7 +1299,7 @@ jQuery(async () => {
 
         const $card = $('<div class="avatar-container interactable"></div>').attr('data-avatar-id', avatarId).attr('tabindex', '0');
 
-        // 批量选中复选框（仅在批量模式下显示）
+        // 批量选中复选框 + 排序手柄（仅管理模式显示）
         if (batchMode) {
             const isChecked = selectedAvatars.has(avatarId);
             const $checkWrap = $('<label class="persona-card-checkbox-wrap"></label>');
@@ -1303,11 +1309,14 @@ jQuery(async () => {
             $checkWrap.append($check);
             $card.append($checkWrap);
             $card.toggleClass('persona-card-selected', isChecked);
+
+            const $handle = $('<span class="persona-sort-handle" title="拖动排序"><i class="fa-solid fa-bars"></i></span>');
+            $card.append($handle);
         }
 
         // 头像
         const $avatar = $('<div class="avatar"></div>').attr('data-avatar-id', avatarId).attr('title', avatarId);
-        $avatar.append($('<img>').attr('src', getThumbnailUrl(avatarId)).attr('alt', 'User Avatar'));
+        $avatar.append($('<img>').attr('src', getThumbnailUrl(avatarId)).attr('alt', 'User Avatar').attr('draggable', 'false'));
         $card.append($avatar);
 
         // 信息容器
@@ -1423,59 +1432,49 @@ jQuery(async () => {
         pruneSelection(filtered);
         renderPersonaList(filtered, contextList);
         renderBatchToolbar();
-        initPersonaDrag();
     }
 
-    // ===== 人设卡片拖拽排序 =====
+    // ===== 人设卡片拖拽排序（仅管理模式，拖动手柄启动，即时响应） =====
     let personaDragState = null;
 
-    function initPersonaDrag() {
-        const block = document.getElementById('user_avatar_block');
-        if (!block) return;
-        block.querySelectorAll('.avatar-container').forEach(card => {
-            card.addEventListener('pointerdown', onPersonaDragPointerDown);
-        });
-    }
-
-    function onPersonaDragPointerDown(e) {
+    function onSortHandlePointerDown(e) {
         if (personaDragState) return;
-        // 复选框区域不触发拖拽
-        if (e.target.closest('.persona-card-checkbox-wrap')) return;
-        const card = e.currentTarget;
+        e.preventDefault(); // 阻止文字选中、图片拖拽、滚动
+        const handle = e.currentTarget;
+        const card = handle.closest('.avatar-container');
+        if (!card) return;
         const avatarId = card.getAttribute('data-avatar-id');
         if (!avatarId) return;
 
-        const suppressCtxMenu = (ev) => ev.preventDefault();
-        document.addEventListener('contextmenu', suppressCtxMenu);
+        const startX = e.clientX, startY = e.clientY;
 
-        const longPressTimer = setTimeout(() => {
-            document.removeEventListener('contextmenu', suppressCtxMenu);
-            startPersonaDrag(card, avatarId, e.clientX, e.clientY);
-        }, 400);
-
-        const cancelLongPress = () => {
-            clearTimeout(longPressTimer);
-            document.removeEventListener('contextmenu', suppressCtxMenu);
-            document.removeEventListener('pointermove', onEarlyMove);
-            document.removeEventListener('pointerup', cancelLongPress);
-            document.removeEventListener('pointercancel', cancelLongPress);
+        const onMove = (ev) => {
+            const dx = ev.clientX - startX;
+            const dy = ev.clientY - startY;
+            if (dx * dx + dy * dy > 36) { // 6px 位移即启动，无需长按
+                cleanup();
+                startPersonaDrag(card, avatarId, ev.clientX, ev.clientY);
+            }
         };
-
-        const onEarlyMove = (ev) => {
-            const dx = ev.clientX - e.clientX;
-            const dy = ev.clientY - e.clientY;
-            if (dx * dx + dy * dy > 64) cancelLongPress();
+        const onUp = () => cleanup();
+        const cleanup = () => {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onUp);
+            document.removeEventListener('pointercancel', onUp);
         };
-
-        document.addEventListener('pointermove', onEarlyMove);
-        document.addEventListener('pointerup', cancelLongPress);
-        document.addEventListener('pointercancel', cancelLongPress);
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+        document.addEventListener('pointercancel', onUp);
     }
 
     function startPersonaDrag(card, avatarId, startX, startY) {
         const ctx = SillyTavern.getContext();
         const personaName = ctx.powerUserSettings.personas?.[avatarId] || avatarId;
         card.classList.add('persona-card-dragging-source');
+
+        // 拖拽期间屏蔽右键菜单
+        const suppressCtxMenu = (ev) => ev.preventDefault();
+        document.addEventListener('contextmenu', suppressCtxMenu);
 
         // 简洁的拖拽幽灵（只显示名字）
         const ghost = document.createElement('div');
@@ -1498,6 +1497,7 @@ jQuery(async () => {
             currentDropIndex: sourceIndex,
             offsetX: 0, offsetY: 16,
             orderKey: getOrderKey(),
+            suppressCtxMenu,
         };
 
         document.addEventListener('pointermove', onPersonaDragMove);
@@ -1551,12 +1551,13 @@ jQuery(async () => {
 
     function onPersonaDragEnd() {
         if (!personaDragState) return;
-        const { ghost, card, sourceIndex, currentDropIndex, avatarIds, orderKey } = personaDragState;
+        const { ghost, card, sourceIndex, currentDropIndex, avatarIds, orderKey, suppressCtxMenu } = personaDragState;
 
         document.removeEventListener('pointermove', onPersonaDragMove);
         document.removeEventListener('pointerup', onPersonaDragEnd);
         document.removeEventListener('pointercancel', onPersonaDragEnd);
         document.removeEventListener('touchmove', preventScroll);
+        document.removeEventListener('contextmenu', suppressCtxMenu);
 
         ghost.remove();
         card.classList.remove('persona-card-dragging-source');
@@ -2081,10 +2082,10 @@ jQuery(async () => {
             updateViewModeInfo();
         }
 
-        // 监听人设选择点击（更新当前人设跟踪 + 右栏标签编辑器）
+        // 监听人设卡片点击（更新当前人设跟踪 + 右栏标签编辑器）
         $(document).on('click', '#user_avatar_block .avatar-container', function (e) {
-            // 复选框点击不触发选中（Phase C 会用到）
-            if ($(e.target).closest('.persona-card-checkbox-wrap').length) return;
+            // 复选框、排序手柄点击不触发选中
+            if ($(e.target).closest('.persona-card-checkbox-wrap, .persona-sort-handle').length) return;
             const avatarId = $(this).attr('data-avatar-id');
             currentPersonaAvatar = avatarId;
             setTimeout(() => {
@@ -2092,6 +2093,9 @@ jQuery(async () => {
                 renderTagEditor(avatarId);
             }, 100);
         });
+
+        // 管理模式：拖动手柄（≡）启动排序，委托绑定一次即可
+        $(document).on('pointerdown', '.persona-sort-handle', onSortHandlePointerDown);
 
         // 监听搜索框输入，用我们的渲染响应
         let searchDebounce = null;
@@ -2197,8 +2201,9 @@ jQuery(async () => {
                 updateCharFilterOptions();
                 renderFilterArea();
                 updateViewModeInfo();
-                // 同步批量模式按钮状态
+                // 同步管理模式按钮和卡片状态
                 $('.persona-batch-mode-btn').toggleClass('active', batchMode);
+                $('#user_avatar_block').toggleClass('manage-mode', batchMode);
                 const cur = detectCurrentPersona();
                 if (cur) renderTagEditor(cur);
                 applyFiltersAndRender();
