@@ -261,6 +261,33 @@ jQuery(async () => {
         toastr.success(`已移动到第 ${targetIndex + 1} 位`);
     }
 
+    /** 批量置顶/置底：把选中的人设整体移到当前排序的最前/最后（保持选中项之间的相对顺序） */
+    function moveSelectedInOrder(toTop) {
+        if (selectedAvatars.size === 0) return;
+        const contextList = getContextList();
+        const picked = contextList.filter(id => selectedAvatars.has(id));
+        if (picked.length === 0) return;
+        const rest = contextList.filter(id => !selectedAvatars.has(id));
+        const newVisible = toTop ? [...picked, ...rest] : [...rest, ...picked];
+
+        // 合并回完整排序（保留不在当前视图中的项），与拖拽排序同一套逻辑
+        const obj = ensurePersonaOrderObj();
+        const key = getOrderKey();
+        const fullOrder = obj[key] || [];
+        const visibleSet = new Set(contextList);
+        const merged = [];
+        let vi = 0;
+        for (const id of fullOrder) {
+            if (visibleSet.has(id)) merged.push(newVisible[vi++]);
+            else merged.push(id);
+        }
+        for (; vi < newVisible.length; vi++) merged.push(newVisible[vi]);
+        obj[key] = merged;
+        saveSettings();
+
+        applyFiltersAndRender();
+    }
+
     function purgeOrphanedOrders() {
         const obj = ensurePersonaOrderObj();
         const ctx = SillyTavern.getContext();
@@ -586,7 +613,6 @@ jQuery(async () => {
                 <select id="persona-char-filter" class="persona-char-filter" title="按绑定的角色卡/群组筛选人设">
                     <option value="">按角色筛选</option>
                 </select>
-                <span class="persona-view-mode-info"></span>
                 <span class="persona-view-mode-btn persona-batch-mode-btn" title="批量编辑">
                     <i class="fa-solid fa-list-check"></i> 批量
                 </span>
@@ -606,6 +632,7 @@ jQuery(async () => {
             $('.persona-view-mode-btn[data-mode]').removeClass('active');
             $(this).addClass('active');
             updateViewModeInfo();
+            renderFilterArea(); // 视图联动：切换模式后标签筛选面板内容要跟着变
             applyFiltersAndRender();
         });
 
@@ -654,19 +681,25 @@ jQuery(async () => {
     }
 
     function updateViewModeInfo() {
-        const $info = $('.persona-view-mode-info');
-        if (!$info.length) return;
+        // 计数直接显示在「当前角色」按钮上，角色名放 tooltip，避免窄栏挤压重叠
+        const $connectedBtn = $('.persona-view-mode-btn[data-mode="connected"]');
+        const $allBtn = $('.persona-view-mode-btn[data-mode="all"]');
+        if (!$connectedBtn.length) return;
 
-        if (viewMode === 'connected') {
-            const name = getCurrentTargetName();
-            const connected = getConnectedPersonas();
-            if (name && connected !== null) {
-                $info.text(`${name} (${connected.length})`);
-            } else {
-                $info.text('无角色卡');
-            }
+        const name = getCurrentTargetName();
+        const connected = getConnectedPersonas();
+
+        if (viewMode === 'connected' && name && connected !== null) {
+            $connectedBtn.html(`<i class="fa-solid fa-link"></i> 当前角色 (${connected.length})`)
+                .attr('title', `当前角色：${name}（${connected.length} 个人设）`);
         } else {
-            $info.text('');
+            $connectedBtn.html('<i class="fa-solid fa-link"></i> 当前角色')
+                .attr('title', name ? `当前角色：${name}` : '仅显示与当前角色卡绑定的人设');
+        }
+
+        if ($allBtn.length && serverAvatarList.length > 0) {
+            $allBtn.html(`<i class="fa-solid fa-users"></i> 全部人设 (${serverAvatarList.length})`)
+                .attr('title', '显示全部人设');
         }
     }
 
@@ -781,14 +814,6 @@ jQuery(async () => {
         });
         $list.append($modeBtn);
 
-        // 收集当前角色绑定人设的标签，用于高亮
-        const connectedTags = new Set();
-        if (connectedIds) {
-            for (const id of connectedIds) {
-                for (const t of getPersonaTags(id)) connectedTags.add(t);
-            }
-        }
-
         // 按使用频率排序（次数相同则保持手动拖拽的顺序）
         const tagCounts = getTagCounts();
         const manualIdx = new Map(allTags.map((t, i) => [t, i]));
@@ -799,10 +824,8 @@ jQuery(async () => {
         for (const tag of sortedTags) {
             const color = getTagColor(tag);
             const isActive = activeFilters.has(tag);
-            const isConnected = connectedTags.has(tag);
             const $btn = $('<span class="persona-tag-filter-btn"></span>')
                 .toggleClass('active', isActive)
-                .toggleClass('connected-highlight', isConnected)
                 .css({ background: color.bg, color: color.fg })
                 .attr('data-tag', tag)
                 .text(tag)
@@ -1019,6 +1042,19 @@ jQuery(async () => {
         const $deselect = $('<span class="persona-batch-btn"><i class="fa-solid fa-xmark"></i> 取消</span>');
         $deselect.on('click', deselectAll);
         $toolbar.append($deselect);
+
+        // 分隔符
+        $toolbar.append('<span class="persona-batch-separator">|</span>');
+
+        // 批量置顶/置底
+        const sortDisabledClass = hasSelection ? '' : ' persona-batch-btn-disabled';
+        const $toTop = $(`<span class="persona-batch-btn${sortDisabledClass}" title="选中的人设排到最前"><i class="fa-solid fa-arrow-up"></i> 置顶</span>`);
+        if (hasSelection) $toTop.on('click', () => moveSelectedInOrder(true));
+        $toolbar.append($toTop);
+
+        const $toBottom = $(`<span class="persona-batch-btn${sortDisabledClass}" title="选中的人设排到最后"><i class="fa-solid fa-arrow-down"></i> 置底</span>`);
+        if (hasSelection) $toBottom.on('click', () => moveSelectedInOrder(false));
+        $toolbar.append($toBottom);
 
         // 分隔符
         $toolbar.append('<span class="persona-batch-separator">|</span>');
@@ -1341,29 +1377,12 @@ jQuery(async () => {
         // 信息容器
         const $info = $('<div class="flex-container wide100pLess70px character_select_container"></div>');
 
-        // 名称 + 排序位号 + 标题
+        // 名称 + 排序位号 + 标题 + 绑定角色小头像（名字行内靠右，与锁定图标分区不冲突）
         const $nameBlock = $('<div class="wide100p character_name_block"></div>');
         const $name = $('<span class="ch_name flex1"></span>').text(personaName);
         $name.append($('<span class="persona-position-badge"></span>').text(`(${index + 1})`));
         $nameBlock.append($name);
         $nameBlock.append($('<small class="ch_additional_info"></small>').text(title));
-        $info.append($nameBlock);
-
-        // 描述
-        let displayDesc = desc || noDescText;
-        if (displayDesc.split('\n').length < 3) displayDesc += '\n\xa0\n\xa0';
-        $info.append($('<div class="ch_description"></div>').text(displayDesc).toggleClass('text_muted', !desc));
-
-        // 标签（直接内嵌，替代旧的 renderCardTags）
-        const tags = getPersonaTags(avatarId);
-        if (tags.length > 0) {
-            const $tags = $('<span class="persona-card-tags"></span>');
-            for (const tag of tags) {
-                const color = getTagColor(tag);
-                $tags.append($('<span class="persona-card-tag"></span>').css({ background: color.bg, color: color.fg }).text(tag));
-            }
-            $info.append($tags);
-        }
 
         // 绑定角色归属显示（小头像堆叠，悬停看名字；群组用图标表示）
         const bindings = getPersonaBindings(avatarId);
@@ -1386,7 +1405,24 @@ jQuery(async () => {
             if (bindings.length > maxShow) {
                 $binds.append($('<span class="persona-bind-chip persona-bind-more"></span>').text(`+${bindings.length - maxShow}`));
             }
-            $info.append($binds);
+            $nameBlock.append($binds);
+        }
+        $info.append($nameBlock);
+
+        // 描述
+        let displayDesc = desc || noDescText;
+        if (displayDesc.split('\n').length < 3) displayDesc += '\n\xa0\n\xa0';
+        $info.append($('<div class="ch_description"></div>').text(displayDesc).toggleClass('text_muted', !desc));
+
+        // 标签（直接内嵌，替代旧的 renderCardTags）
+        const tags = getPersonaTags(avatarId);
+        if (tags.length > 0) {
+            const $tags = $('<span class="persona-card-tags"></span>');
+            for (const tag of tags) {
+                const color = getTagColor(tag);
+                $tags.append($('<span class="persona-card-tag"></span>').css({ background: color.bg, color: color.fg }).text(tag));
+            }
+            $info.append($tags);
         }
 
         // 锁定状态标签（保留 ST 原生结构，主题 CSS 兼容）
