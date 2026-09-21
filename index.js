@@ -298,36 +298,68 @@ jQuery(async () => {
 
     // ===== 绑定关系查询 =====
     /**
-     * 获取与当前角色卡/群组绑定的所有人设 avatarId 列表
-     * @returns {string[]|null} 绑定的人设列表，null 表示当前没有角色卡
+     * 获取当前选中的角色卡/群组
+     * @returns {{type: 'character'|'group', id: string}|null} 无选中时返回 null
      */
-    function getConnectedPersonas() {
+    function getCurrentTarget() {
         const ctx = SillyTavern.getContext();
-        const charId = ctx.characterId;
-        const groupId = ctx.groupId;
-
-        let targetType, targetId;
-
-        if (groupId) {
-            targetType = 'group';
-            targetId = groupId;
-        } else if (charId !== undefined && charId !== null) {
-            targetType = 'character';
-            targetId = ctx.characters[charId]?.avatar;
+        if (ctx.groupId) {
+            return { type: 'group', id: ctx.groupId };
         }
+        if (ctx.characterId !== undefined && ctx.characterId !== null) {
+            const avatar = ctx.characters[ctx.characterId]?.avatar;
+            if (avatar) return { type: 'character', id: avatar };
+        }
+        return null;
+    }
 
-        if (!targetId) return null;
+    /**
+     * 获取与指定角色卡/群组绑定的人设 avatarId 列表
+     * @param {{type: string, id: string}} target 绑定目标，缺省为当前选中
+     * @returns {string[]|null} 绑定的人设列表，null 表示目标不存在
+     */
+    function getConnectedPersonas(target) {
+        const ctx = SillyTavern.getContext();
+        const t = target || getCurrentTarget();
+        if (!t) return null;
 
         const descriptions = ctx.powerUserSettings.persona_descriptions;
         if (!descriptions) return [];
         const connected = [];
         for (const [avatarId, desc] of Object.entries(descriptions)) {
             const connections = desc?.connections ?? [];
-            if (connections.some(c => c.type === targetType && c.id === targetId)) {
+            if (connections.some(c => c.type === t.type && c.id === t.id)) {
                 connected.push(avatarId);
             }
         }
         return connected;
+    }
+
+    /**
+     * 获取人设绑定的角色卡/群组列表（用于卡片归属显示和按角色筛选）
+     * @returns {Array<{key: string, name: string, img: string|null, isGroup: boolean}>}
+     */
+    function getPersonaBindings(avatarId) {
+        const ctx = SillyTavern.getContext();
+        const conns = ctx.powerUserSettings.persona_descriptions?.[avatarId]?.connections || [];
+        const bindings = [];
+        for (const c of conns) {
+            if (c.type === 'character') {
+                const char = ctx.characters?.find(ch => ch?.avatar === c.id);
+                if (!char) continue;
+                bindings.push({
+                    key: 'char:' + c.id,
+                    name: char.name,
+                    img: `/thumbnail?type=avatar&file=${encodeURIComponent(c.id)}`,
+                    isGroup: false,
+                });
+            } else if (c.type === 'group') {
+                const group = ctx.groups?.find(g => g?.id === c.id);
+                if (!group) continue;
+                bindings.push({ key: 'group:' + c.id, name: group.name || '群组', img: null, isGroup: true });
+            }
+        }
+        return bindings;
     }
 
     /**
@@ -490,6 +522,52 @@ jQuery(async () => {
 
     // ===== 视图模式切换（绑定 / 全部） =====
     let viewMode = 'connected'; // 'connected' | 'all'
+    let charFilter = ''; // 按角色筛选：'' | 'char:<avatar>' | 'group:<id>'
+
+    /** 重建按角色筛选下拉框的选项（绑定关系变化时调用） */
+    function updateCharFilterOptions() {
+        const $sel = $('#persona-char-filter');
+        if (!$sel.length) return;
+        const ctx = SillyTavern.getContext();
+
+        // 收集所有角色卡/群组的绑定情况
+        const bindMap = new Map(); // key -> {name, count, isGroup}
+        const descriptions = ctx.powerUserSettings.persona_descriptions || {};
+        for (const desc of Object.values(descriptions)) {
+            for (const c of desc?.connections || []) {
+                let key = null, name = null, isGroup = false;
+                if (c.type === 'character') {
+                    const char = ctx.characters?.find(ch => ch?.avatar === c.id);
+                    if (!char) continue;
+                    key = 'char:' + c.id;
+                    name = char.name;
+                } else if (c.type === 'group') {
+                    const group = ctx.groups?.find(g => g?.id === c.id);
+                    if (!group) continue;
+                    key = 'group:' + c.id;
+                    name = group.name || '群组';
+                    isGroup = true;
+                } else {
+                    continue;
+                }
+                if (!bindMap.has(key)) bindMap.set(key, { name, count: 0, isGroup });
+                bindMap.get(key).count++;
+            }
+        }
+
+        // 当前选中项失效（角色被删等）时重置
+        if (charFilter && !bindMap.has(charFilter)) charFilter = '';
+
+        const prev = charFilter;
+        $sel.empty();
+        $sel.append($('<option>').val('').text('按角色筛选'));
+        const sorted = [...bindMap.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name));
+        for (const [key, info] of sorted) {
+            const prefix = info.isGroup ? '👥 ' : '';
+            $sel.append($('<option>').val(key).text(`${prefix}${info.name} (${info.count})`));
+        }
+        $sel.val(prev);
+    }
 
     function injectViewModeToggle() {
         if ($('#persona-tags-view-mode').length) return;
@@ -505,6 +583,9 @@ jQuery(async () => {
                 <span class="persona-view-mode-btn" data-mode="all" title="显示所有人设">
                     <i class="fa-solid fa-users"></i> 全部人设
                 </span>
+                <select id="persona-char-filter" class="persona-char-filter" title="按绑定的角色卡/群组筛选人设">
+                    <option value="">按角色筛选</option>
+                </select>
                 <span class="persona-view-mode-info"></span>
                 <span class="persona-view-mode-btn persona-batch-mode-btn" title="批量编辑">
                     <i class="fa-solid fa-list-check"></i> 批量
@@ -515,6 +596,8 @@ jQuery(async () => {
             </div>
         `;
         $searchRow.after(html);
+
+        updateCharFilterOptions();
 
         // 点击切换视图模式（命名空间防止重复绑定）
         $(document).off('click.ptViewMode').on('click.ptViewMode', '.persona-view-mode-btn[data-mode]', function () {
@@ -546,6 +629,7 @@ jQuery(async () => {
             $icon.removeClass('fa-spin');
             if (ok) toastr.success('已刷新');
             else toastr.error('刷新失败，请检查网络');
+            updateCharFilterOptions();
         });
 
         // 批量编辑模式切换
@@ -558,6 +642,12 @@ jQuery(async () => {
             }
             applyFiltersAndRender();
             if (batchMode) renderBatchToolbar();
+        });
+
+        // 按角色筛选
+        $(document).off('change.ptCharFilter').on('change.ptCharFilter', '#persona-char-filter', function () {
+            charFilter = $(this).val() || '';
+            applyFiltersAndRender();
         });
 
         updateViewModeInfo();
@@ -584,10 +674,33 @@ jQuery(async () => {
     let activeFilters = new Set();
     let filterMode = 'include'; // 'include' 正向 | 'exclude' 反向
     let dropdownOpen = false;
+    let tagFilterQuery = ''; // 标签搜索词（输入即时过滤，不触发重渲染）
+
+    /** 统计每个标签被多少人设使用（用于按频率排序） */
+    function getTagCounts() {
+        const counts = {};
+        const settings = getSettings();
+        for (const tags of Object.values(settings.tagMap || {})) {
+            if (!Array.isArray(tags)) continue;
+            for (const t of tags) counts[t] = (counts[t] || 0) + 1;
+        }
+        return counts;
+    }
 
     function renderFilterArea() {
-        const allTags = getAllTags();
-        // 清除 activeFilters 中已不存在的 tag（防止幽灵筛选）
+        let allTags = getAllTags();
+
+        // 视图联动：「当前角色」模式下，筛选面板只列出该角色人设实际用到的标签
+        const connectedIds = getConnectedPersonas();
+        if (viewMode === 'connected' && connectedIds !== null) {
+            const visible = new Set();
+            for (const id of connectedIds) {
+                for (const t of getPersonaTags(id)) visible.add(t);
+            }
+            allTags = allTags.filter(t => visible.has(t));
+        }
+
+        // 清除 activeFilters 中已不可见的 tag（防止幽灵筛选）
         for (const f of [...activeFilters]) {
             if (!allTags.includes(f)) activeFilters.delete(f);
         }
@@ -628,6 +741,24 @@ jQuery(async () => {
 
         // 下拉面板
         const $panel = $(`<div class="persona-filter-dropdown-panel ${dropdownOpen ? 'open' : ''}"></div>`);
+
+        // 标签搜索框：打字即时隐藏不匹配的标签，不重渲染、不丢焦点
+        const $search = $('<input type="text" class="text_pole persona-filter-search" placeholder="搜索标签…" enterkeyhint="search">');
+        $search.val(tagFilterQuery);
+        $search.on('input', () => {
+            tagFilterQuery = $search.val().trim().toLowerCase();
+            const $btns = $panel.find('.persona-tag-filter-btn');
+            if (!tagFilterQuery) {
+                $btns.show();
+            } else {
+                $btns.each(function () {
+                    $(this).toggle($(this).attr('data-tag').toLowerCase().includes(tagFilterQuery));
+                });
+            }
+        });
+        $search.on('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+        $panel.append($search);
+
         const $list = $('<div class="persona-filter-dropdown-list"></div>');
 
         // 重置按钮（常驻）
@@ -652,14 +783,20 @@ jQuery(async () => {
 
         // 收集当前角色绑定人设的标签，用于高亮
         const connectedTags = new Set();
-        const connectedIds = getConnectedPersonas();
         if (connectedIds) {
             for (const id of connectedIds) {
                 for (const t of getPersonaTags(id)) connectedTags.add(t);
             }
         }
 
-        for (const tag of allTags) {
+        // 按使用频率排序（次数相同则保持手动拖拽的顺序）
+        const tagCounts = getTagCounts();
+        const manualIdx = new Map(allTags.map((t, i) => [t, i]));
+        const sortedTags = [...allTags].sort((a, b) =>
+            (tagCounts[b] || 0) - (tagCounts[a] || 0) || manualIdx.get(a) - manualIdx.get(b)
+        );
+
+        for (const tag of sortedTags) {
             const color = getTagColor(tag);
             const isActive = activeFilters.has(tag);
             const isConnected = connectedTags.has(tag);
@@ -668,7 +805,8 @@ jQuery(async () => {
                 .toggleClass('connected-highlight', isConnected)
                 .css({ background: color.bg, color: color.fg })
                 .attr('data-tag', tag)
-                .text(tag);
+                .text(tag)
+                .toggle(!tagFilterQuery || tag.toLowerCase().includes(tagFilterQuery));
             $btn.on('click', () => {
                 if (isDragging) return;
                 if (activeFilters.has(tag)) {
@@ -1112,6 +1250,17 @@ jQuery(async () => {
             result = result.filter(avatarId => connectedSet.has(avatarId));
         }
 
+        // 按角色筛选（下拉框）：只看绑定给所选角色卡/群组的人设
+        if (charFilter) {
+            const sep = charFilter.indexOf(':');
+            const fType = charFilter.slice(0, sep) === 'group' ? 'group' : 'character';
+            const fId = charFilter.slice(sep + 1);
+            result = result.filter(avatarId => {
+                const conns = ctx.powerUserSettings.persona_descriptions?.[avatarId]?.connections || [];
+                return conns.some(c => c.type === fType && String(c.id) === fId);
+            });
+        }
+
         const order = getPersonaOrder();
         if (order.length > 0) {
             const orderMap = new Map(order.map((id, i) => [id, i]));
@@ -1214,6 +1363,30 @@ jQuery(async () => {
                 $tags.append($('<span class="persona-card-tag"></span>').css({ background: color.bg, color: color.fg }).text(tag));
             }
             $info.append($tags);
+        }
+
+        // 绑定角色归属显示（小头像堆叠，悬停看名字；群组用图标表示）
+        const bindings = getPersonaBindings(avatarId);
+        if (bindings.length > 0) {
+            const $binds = $('<span class="persona-card-binds"></span>')
+                .attr('title', '绑定：' + bindings.map(b => b.name).join('、'));
+            const maxShow = 4;
+            for (let i = 0; i < Math.min(bindings.length, maxShow); i++) {
+                const b = bindings[i];
+                if (b.img) {
+                    const $img = $('<img class="persona-bind-chip">').attr('src', b.img).attr('alt', b.name);
+                    $img.on('error', function () {
+                        $(this).replaceWith($('<span class="persona-bind-chip persona-bind-chip-icon"><i class="fa-solid fa-user"></i></span>'));
+                    });
+                    $binds.append($img);
+                } else {
+                    $binds.append($('<span class="persona-bind-chip persona-bind-chip-icon"><i class="fa-solid fa-users"></i></span>'));
+                }
+            }
+            if (bindings.length > maxShow) {
+                $binds.append($('<span class="persona-bind-chip persona-bind-more"></span>').text(`+${bindings.length - maxShow}`));
+            }
+            $info.append($binds);
         }
 
         // 锁定状态标签（保留 ST 原生结构，主题 CSS 兼容）
@@ -1602,8 +1775,6 @@ jQuery(async () => {
     // ===== 复制人设增强 =====
     let pendingDuplication = null;
     let pendingCreationTags = null;
-    let lastDupeCopyTags = false;
-    let lastDupeCopyConnections = false;
 
     function enhanceDuplicateDialog(dialog) {
         dialog.classList.add('persona-dupe-modified');
@@ -1627,31 +1798,14 @@ jQuery(async () => {
             okBtn.style.display = 'none';
 
             const controls = dialog.querySelector('.popup-controls');
+            const popupContent = dialog.querySelector('.popup-content');
             if (controls) {
-                // 勾选区
-                const optionsDiv = document.createElement('div');
-                optionsDiv.className = 'persona-dupe-options';
-
-                const tagLabel = document.createElement('label');
-                tagLabel.className = 'persona-dupe-checkbox';
-                const tagCheck = document.createElement('input');
-                tagCheck.type = 'checkbox';
-                tagCheck.checked = lastDupeCopyTags;
-                tagLabel.append(tagCheck, ' 复制标签');
-
-                const connLabel = document.createElement('label');
-                connLabel.className = 'persona-dupe-checkbox';
-                const connCheck = document.createElement('input');
-                connCheck.type = 'checkbox';
-                connCheck.checked = lastDupeCopyConnections;
-                connLabel.append(connCheck, ' 复制绑定关系');
-
-                optionsDiv.append(tagLabel, connLabel);
-
-                // 插入到弹窗内容区底部
-                const popupContent = dialog.querySelector('.popup-content');
-                if (popupContent) {
-                    popupContent.appendChild(optionsDiv);
+                // 行为说明（复制行为已固定，不再提供选项）
+                if (popupContent && !popupContent.querySelector('.persona-dupe-hint')) {
+                    const hint = document.createElement('div');
+                    hint.className = 'persona-dupe-hint';
+                    hint.textContent = '将自动复制标签，并绑定到当前角色（未选中角色则不绑定）';
+                    popupContent.appendChild(hint);
                 }
 
                 // 复制按钮
@@ -1659,11 +1813,9 @@ jQuery(async () => {
                 confirmBtn.className = 'menu_button popup-button-custom result-control';
                 confirmBtn.textContent = '复制';
                 confirmBtn.addEventListener('click', () => {
-                    lastDupeCopyTags = tagCheck.checked;
-                    lastDupeCopyConnections = connCheck.checked;
                     if (pendingDuplication) {
-                        pendingDuplication.copyTags = tagCheck.checked;
-                        pendingDuplication.copyConnections = connCheck.checked;
+                        pendingDuplication.copyTags = true;
+                        pendingDuplication.copyConnections = true;
                     }
                     okBtn.click();
                 });
@@ -1718,13 +1870,14 @@ jQuery(async () => {
                     }
                 }
                 if (pendingDuplication.copyConnections) {
-                    const descriptions = ctx.powerUserSettings.persona_descriptions;
-                    const sourceConns = descriptions?.[pendingDuplication.sourceAvatarId]?.connections;
-                    if (sourceConns && sourceConns.length > 0) {
+                    // 绑定到当前角色；未选中角色/群组时不绑定
+                    const target = getCurrentTarget();
+                    if (target) {
+                        const descriptions = ctx.powerUserSettings.persona_descriptions;
                         if (!descriptions[id]) descriptions[id] = {};
-                        descriptions[id].connections = sourceConns.map(c => ({ ...c }));
+                        descriptions[id].connections = [{ type: target.type, id: target.id }];
                         saveSettings();
-                        console.log(LOG, 'Copied connections to duplicated persona:', id);
+                        console.log(LOG, 'Bound duplicated persona to current target:', target);
                     }
                 }
                 pendingDuplication = null;
@@ -1984,8 +2137,8 @@ jQuery(async () => {
             if (!ctx.powerUserSettings.personas[sourceAvatarId]) return;
             pendingDuplication = {
                 sourceAvatarId,
-                copyTags: false,
-                copyConnections: false,
+                copyTags: true,
+                copyConnections: true,
                 existingIds: new Set(Object.keys(ctx.powerUserSettings.personas)),
                 timestamp: Date.now(),
             };
@@ -2069,6 +2222,7 @@ jQuery(async () => {
                 if (!$('#persona-tags-view-mode').length) {
                     injectViewModeToggle();
                 }
+                updateCharFilterOptions();
                 renderFilterArea();
                 updateViewModeInfo();
                 // 同步批量模式按钮状态
