@@ -453,6 +453,16 @@ dialog.popup.persona-dupe-modified .popup-button-custom {
     pointer-events: none;
 }
 
+/* --- Drawer columns: fixed 50/50 split, immune to content width changes ---
+   ST 原生两栏是 flex-basis:auto（内容决定宽度），右侧出现「正在使用临时用户设定」
+   等提示文字时最小宽度被撑大，挤压左栏造成抖动。改为等分 + min-width:0，
+   提示文字在右栏内自行换行，不再影响布局。 */
+#persona-management-block .persona_management_left_column,
+#persona-management-block .persona_management_right_column {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
 /* --- Card Checkbox --- */
 .persona-card-checkbox-wrap {
     position: absolute;
