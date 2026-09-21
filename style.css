@@ -375,21 +375,34 @@ dialog.popup.persona-dupe-modified .popup-button-custom {
 }
 
 /* --- Char Filter Select (view mode bar) --- */
-.persona-char-filter {
+#persona-tags-view-mode .persona-char-filter {
+    appearance: none;
+    -webkit-appearance: none;
     font-size: 0.8em;
-    padding: 3px 8px;
+    line-height: 1.4;
+    padding: 3px 20px 3px 10px;
+    margin: 0;
+    height: auto;
     border-radius: 10px;
     border: 1px solid var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
-    background: transparent;
+    background-color: transparent;
     opacity: 0.5;
     cursor: pointer;
     max-width: 120px;
     flex-shrink: 0;
 }
 
-.persona-char-filter:hover {
+#persona-tags-view-mode .persona-char-filter:hover {
     opacity: 0.8;
+}
+
+/* --- Filter scope hint (view linkage indicator) --- */
+.persona-filter-scope-hint {
+    font-size: 0.72em;
+    opacity: 0.5;
+    color: var(--SmartThemeBodyColor);
+    margin-bottom: 4px;
 }
 
 /* --- Card Bind Chips (bound character avatars stacked in the name row, right side) --- */
@@ -505,32 +518,6 @@ dialog.popup.persona-dupe-modified .popup-button-custom {
     opacity: 0.45;
     margin-left: 3px;
     font-weight: normal;
-}
-
-/* --- Position Editor (Right Column) --- */
-.persona-position-controls {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
-}
-
-.persona-position-label {
-    font-size: 0.85em;
-    opacity: 0.7;
-}
-
-.persona-position-input {
-    width: 50px !important;
-    text-align: center;
-    font-size: 0.85em !important;
-    padding: 2px 4px !important;
-}
-
-#persona-position-current {
-    font-size: 0.8em;
-    opacity: 0.6;
-    margin-left: auto;
 }
 
 /* --- Persona Card Drag & Drop --- */

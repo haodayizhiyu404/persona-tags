@@ -230,37 +230,6 @@ jQuery(async () => {
         saveSettings();
     }
 
-    function movePersonaToPosition(avatarId, targetIndex) {
-        const contextList = getContextList();
-        const currentIndex = contextList.indexOf(avatarId);
-        if (currentIndex === -1) return;
-        targetIndex = Math.max(0, Math.min(targetIndex, contextList.length - 1));
-        if (currentIndex === targetIndex) { toastr.info('已在该位置'); return; }
-
-        const newVisible = [...contextList];
-        newVisible.splice(currentIndex, 1);
-        newVisible.splice(targetIndex, 0, avatarId);
-
-        // 合并回完整排序（保留不在当前视图中的项）
-        const obj = ensurePersonaOrderObj();
-        const key = getOrderKey();
-        const fullOrder = obj[key] || [];
-        const visibleSet = new Set(contextList);
-        const merged = [];
-        let vi = 0;
-        for (const id of fullOrder) {
-            if (visibleSet.has(id)) merged.push(newVisible[vi++]);
-            else merged.push(id);
-        }
-        for (; vi < newVisible.length; vi++) merged.push(newVisible[vi]);
-        obj[key] = merged;
-        saveSettings();
-
-        applyFiltersAndRender();
-        renderTagEditor(avatarId);
-        toastr.success(`已移动到第 ${targetIndex + 1} 位`);
-    }
-
     /** 批量置顶/置底：把选中的人设整体移到当前排序的最前/最后（保持选中项之间的相对顺序） */
     function moveSelectedInOrder(toTop) {
         if (selectedAvatars.size === 0) return;
@@ -416,22 +385,6 @@ jQuery(async () => {
     function renderTagEditor(avatarId) {
         currentPersonaAvatar = avatarId;
 
-        // 更新位置编辑器
-        const $posEditor = $('#persona-position-editor');
-        if ($posEditor.length) {
-            if (avatarId) {
-                const contextList = getContextList();
-                const pos = contextList.indexOf(avatarId);
-                $('#persona-position-current').text(pos >= 0 ? `当前 #${pos + 1}（共 ${contextList.length}）` : '');
-                $('#persona-position-input').val('').prop('disabled', false).attr('max', contextList.length);
-                $('#persona-position-go').removeClass('persona-batch-btn-disabled');
-            } else {
-                $('#persona-position-current').text('');
-                $('#persona-position-input').val('').prop('disabled', true);
-                $('#persona-position-go').addClass('persona-batch-btn-disabled');
-            }
-        }
-
         const $section = $('#persona-tags-editor-section');
         if (!$section.length) return;
 
@@ -475,19 +428,6 @@ jQuery(async () => {
         if (!$target.length) return;
 
         const html = `
-            <div id="persona-position-editor" class="persona-tags-section">
-                <div class="persona-tags-header">
-                    <i class="fa-solid fa-arrow-up-1-9"></i>
-                    <span>排序位置</span>
-                    <span id="persona-position-current"></span>
-                </div>
-                <form id="persona-position-form" class="persona-position-controls" autocomplete="off">
-                    <span class="persona-position-label">移动到第</span>
-                    <input id="persona-position-input" class="text_pole persona-position-input" type="number" min="1" enterkeyhint="done">
-                    <span class="persona-position-label">位</span>
-                    <span id="persona-position-go" class="persona-batch-btn">移动</span>
-                </form>
-            </div>
             <div id="persona-tags-editor-section" class="persona-tags-section">
                 <div class="persona-tags-header">
                     <i class="fa-solid fa-tags"></i>
@@ -501,19 +441,6 @@ jQuery(async () => {
             </div>
         `;
         $target.after(html);
-
-        // 位置编辑器：form submit 收起键盘（兼容安卓），按钮触发移动
-        $('#persona-position-form').on('submit', (e) => {
-            e.preventDefault();
-            $('#persona-position-input').blur();
-        });
-        $('#persona-position-go').on('click', () => {
-            if (!currentPersonaAvatar) return;
-            const input = parseInt($('#persona-position-input').val(), 10);
-            if (isNaN(input) || input < 1) { toastr.warning('请输入有效的位置数字'); return; }
-            movePersonaToPosition(currentPersonaAvatar, input - 1);
-            $('#persona-position-input').val('');
-        });
 
         // 回车添加标签：通过 form submit 实现，兼容移动端虚拟键盘
         // （移动端 Android 的 keydown 事件 e.key 返回 "Unidentified" 而非 "Enter"，
@@ -775,6 +702,14 @@ jQuery(async () => {
         // 下拉面板
         const $panel = $(`<div class="persona-filter-dropdown-panel ${dropdownOpen ? 'open' : ''}"></div>`);
 
+        // 视图联动提示：让「当前角色」模式下的标签范围一目了然
+        if (viewMode === 'connected') {
+            const hintText = connectedIds !== null
+                ? '仅当前角色在用的标签'
+                : '未选中角色卡：显示全部标签';
+            $panel.append($('<div class="persona-filter-scope-hint"></div>').text(hintText));
+        }
+
         // 标签搜索框：打字即时隐藏不匹配的标签，不重渲染、不丢焦点
         const $search = $('<input type="text" class="text_pole persona-filter-search" placeholder="搜索标签…" enterkeyhint="search">');
         $search.val(tagFilterQuery);
@@ -1030,6 +965,8 @@ jQuery(async () => {
 
         $toolbar.empty();
 
+        const hasSelection = selectedAvatars.size > 0;
+
         // 选中计数
         $toolbar.append($('<span class="persona-batch-count"></span>').text(`已选 ${selectedAvatars.size} 个`));
 
@@ -1060,7 +997,6 @@ jQuery(async () => {
         $toolbar.append('<span class="persona-batch-separator">|</span>');
 
         // 批量打标签
-        const hasSelection = selectedAvatars.size > 0;
         const disabledClass = hasSelection ? '' : ' persona-batch-btn-disabled';
 
         const $addTags = $(`<span class="persona-batch-btn${disabledClass}"><i class="fa-solid fa-tags"></i> 打标签</span>`);
