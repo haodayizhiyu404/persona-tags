@@ -453,14 +453,29 @@ dialog.popup.persona-dupe-modified .popup-button-custom {
     pointer-events: none;
 }
 
-/* --- Drawer columns: fixed 50/50 split, immune to content width changes ---
-   ST 原生两栏是 flex-basis:auto（内容决定宽度），右侧出现「正在使用临时用户设定」
-   等提示文字时最小宽度被撑大，挤压左栏造成抖动。改为等分 + min-width:0，
-   提示文字在右栏内自行换行，不再影响布局。 */
-#persona-management-block .persona_management_left_column,
-#persona-management-block .persona_management_right_column {
-    flex: 1 1 0;
-    min-width: 0;
+/* --- Persona drawer layout fixes --- */
+
+/* 桌面端：提示文字（如「正在使用临时用户设定」）出现/消失时，抽屉内容变高会
+   触发垂直滚动条突然出现（挤占内容宽度导致左栏重排抖动），且抽屉高度带过渡动画。
+   预留滚动条位置 + 仅保留 display 过渡，消除抖动。 */
+#PersonaManagement.drawer-content {
+    scrollbar-gutter: stable;
+    transition-property: display;
+}
+
+/* 移动端（≤1000px 上下布局）：左栏（人设列表）高度由内容决定、内部滚动，
+   右栏占据剩余空间并内部滚动。防止左栏在纵向 flex 分配中被压到不可见
+   （scroll 容器的自动最小高度为 0，flex:1 + basis 0 会在空间不足时坍缩）。 */
+@media screen and (max-width: 1000px) {
+    #persona-management-block .persona_management_left_column {
+        flex: 0 0 auto;
+    }
+
+    #persona-management-block .persona_management_right_column {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow-y: auto;
+    }
 }
 
 /* --- Card Checkbox --- */
